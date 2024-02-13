@@ -5,7 +5,8 @@ References: FileSystemWatcher(https://learn.microsoft.com/en-us/dotnet/api/syste
 WORK IN PROGRESS...
 
 ```rust
-let mut op = FileWatcherOptions::new("D:\\Test");
+fn main() {
+    let mut op = FileWatcherOptions::new("D:\\Test");
     op.with_extensions(&["*.txt", "*.pdf", "*.rs", "*.jpg", "*.jpeg", "*.*"])
         .with_refresh_rate(250)
         .with_on_changes(|ev| {
@@ -19,9 +20,9 @@ let mut op = FileWatcherOptions::new("D:\\Test");
             println!();
         });
 
-let mut fw = FileWatcher::new_with_options(&op);
+    let mut fw = FileWatcher::new_with_options(&op);
 
-let _ = match fw.start() {
+    let _ = match fw.start() {
         Ok(started) => {
             println!("[INFO] Watching folder: {}", fw.watched_dir());
             println!("[INFO] File extensions watched: {:?}", fw.extensions());
@@ -32,9 +33,9 @@ let _ = match fw.start() {
         Err(error) => panic!("Could not start the file watcher: {}", error),
     };
 
-let _ = io::stdin().read_line(&mut String::new());
+    let _ = io::stdin().read_line(&mut String::new());
 
-match fw.stop() {
+    match fw.stop() {
         Ok(stopped) => match stopped {
             true => println!("File watcher has stopped!"),
             _ => println!("File watcher is already stopped!"),
@@ -42,5 +43,6 @@ match fw.stop() {
         Err(err) => println!("Error while attempting to stop the file watcher: {:?}", err),
     }
 
-drop(fw);
+    drop(fw);
+}
 ```
