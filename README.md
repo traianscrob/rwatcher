@@ -5,10 +5,11 @@ References: FileSystemWatcher(https://learn.microsoft.com/en-us/dotnet/api/syste
 WORK IN PROGRESS...
 
 ```rust
-fn main() {
+fn main() -> std::io::Result<()> {
     let mut op = FileWatcherOptions::new("D:\\Test");
     op.with_extensions(&["*.txt", "*.pdf", "*.rs", "*.jpg", "*.jpeg", "*.*"])
         .with_refresh_rate(250)
+        .with_notify_filters(NotifyFilters::CreationTime | NotifyFilters::LastWrite)
         .with_on_changes(|ev| {
             let files = ev.files();
             println!("{:?} -> {}", ev.operation(), files.len());
@@ -44,5 +45,7 @@ fn main() {
     }
 
     drop(fw);
+
+    Ok(())
 }
 ```
