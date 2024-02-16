@@ -27,68 +27,47 @@ pub(crate) struct SearchDir {
 
 #[derive(Debug, Clone)]
 pub struct File {
-    path: PathBuf,
-    meta: Metadata,
+    name: String,
+    last_modified: Option<SystemTime>,
+    last_accessed: Option<SystemTime>,
+    created: SystemTime,
 }
 
 impl Eq for File {}
 
 impl PartialEq for File {
     fn eq(&self, other: &Self) -> bool {
-        self.path.to_str().unwrap() == other.path.to_str().unwrap()
+        self.name == other.name
     }
 }
 
 impl Hash for File {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.path.hash(state);
+        self.name.hash(state);
     }
 }
 
 impl Display for File {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.path.to_str().unwrap())
+        write!(f, "{}", self.name)
     }
 }
 
 impl File {
-    pub fn path(&self) -> &PathBuf {
-        &self.path
-    }
-
     pub fn name(&self) -> &str {
-        match self.path.as_os_str().to_str() {
-            None => EMPTY_STRING,
-            Some(value) => value,
-        }
-    }
-
-    pub fn extension(&self) -> &str {
-        match self.path.extension().and_then(OsStr::to_str) {
-            Some(ext) => ext,
-            _ => EMPTY_STRING,
-        }
+        &self.name
     }
 
     pub fn last_modified(&self) -> Option<SystemTime> {
-        match self.meta.modified() {
-            Ok(value) => Some(value),
-            _ => None,
-        }
+        self.last_modified
     }
 
     pub fn last_accessed(&self) -> Option<SystemTime> {
-        match self.meta.accessed() {
-            Ok(value) => Some(value),
-            _ => None,
-        }
+        self.last_accessed
     }
 
-    pub fn created(&self) -> Option<SystemTime> {
-        match self.meta.created() {
-            Ok(value) => Some(value),
-            _ => None,
-        }
+    pub fn created(&self) -> SystemTime {
+        self.created
     }
 }
 
@@ -231,9 +210,12 @@ impl SearchDir {
                         result,
                     );
                 } else {
+                    let meta = file.metadata().unwrap();
                     result.insert(File {
-                        path: file.path(),
-                        meta: file.metadata().unwrap(),
+                        name: String::from(file.path().to_str().unwrap()),
+                        created: meta.created().unwrap(),
+                        last_modified: Some(meta.modified().unwrap()),
+                        last_accessed: Some(meta.accessed().unwrap()),
                     });
                 }
             }

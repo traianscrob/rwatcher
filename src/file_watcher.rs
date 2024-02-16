@@ -30,53 +30,46 @@ impl Display for NotifyFilters {
 }
 
 #[derive(Debug, Clone)]
-pub enum OPERATIONS {
-    ADD,
+pub enum OPERATION {
+    CREATE,
     CHANGE,
     DELETE,
+    RENAME,
+    ERROR,
 }
 
 #[derive(Debug, Clone)]
-enum ChannelOperations {
-    CONTINUE,
+enum ChannelOperation {
+    CONTINUE(OPERATION),
     EXIT,
 }
 
 #[derive(Debug, Clone)]
 pub struct OnChangesArgs {
-    operation: OPERATIONS,
-    files: HashSet<PathBuf>,
+    operation: OPERATION,
+    files: HashSet<File>,
 }
 
 impl OnChangesArgs {
-    fn new(operation: OPERATIONS, files: HashSet<PathBuf>) -> Self {
+    fn new(operation: OPERATION, files: HashSet<File>) -> Self {
         Self { operation, files }
     }
 
-    pub fn operation(&self) -> OPERATIONS {
+    pub fn operation(&self) -> OPERATION {
         self.operation.clone()
     }
 
-    pub fn files(&self) -> &HashSet<PathBuf> {
+    pub fn files(&self) -> &HashSet<File> {
         &self.files
     }
 }
 
 #[derive(Debug, Clone)]
-struct OperationMessage(OPERATIONS, HashSet<File>);
-
-#[derive(Debug, Clone)]
-struct ChannelMessage(ChannelOperations, Option<OperationMessage>);
+struct ChannelMessage(ChannelOperation, Option<HashSet<File>>);
 
 impl ChannelMessage {
-    pub fn new(op: ChannelOperations, message: Option<OperationMessage>) -> Self {
+    pub fn new(op: ChannelOperation, message: Option<HashSet<File>>) -> Self {
         Self(op, message)
-    }
-}
-
-impl OperationMessage {
-    pub fn new(op: OPERATIONS, elems: HashSet<File>) -> Self {
-        Self(op, elems)
     }
 }
 
@@ -242,20 +235,17 @@ impl FileWatcher {
         let child = thread::spawn(move || loop {
             match receiver_mutex.lock().unwrap().recv() {
                 Ok(value) => match value.0 {
-                    ChannelOperations::CONTINUE => {
-                        if let Some(op) = value.1 {
-                            match func {
-                                Some(f) => {
-                                    let operation = op.0;
-                                    let res: HashSet<PathBuf> =
-                                        op.1.into_iter().map(|f| f.path().clone()).collect();
-                                    f(OnChangesArgs::new(operation, res));
-                                }
-                                _ => {}
+                    ChannelOperation::CONTINUE(op) => {
+                        if let Some(data) = value.1 {
+                            if let Some(f) = func {
+                                let operation = op;
+                                let res: HashSet<File> =
+                                    data.into_iter().map(|f| f.clone()).collect();
+                                f(OnChangesArgs::new(operation, res));
                             }
                         }
                     }
-                    ChannelOperations::EXIT => {
+                    ChannelOperation::EXIT => {
                         break;
                     }
                 },
@@ -324,8 +314,8 @@ impl FileWatcher {
 
                     // trigger event for added files
                     if let Err(error) = local_sender.clone().send(ChannelMessage::new(
-                        ChannelOperations::CONTINUE,
-                        Some(OperationMessage::new(OPERATIONS::ADD, added_files)),
+                        ChannelOperation::CONTINUE(OPERATION::CREATE),
+                        Some(added_files),
                     )) {
                         panic!("Error while sending{}", error);
                     };
@@ -334,19 +324,16 @@ impl FileWatcher {
                 // trigger event for changed files
                 if changed_files.len() > 0 {
                     let _ = local_sender.clone().send(ChannelMessage::new(
-                        ChannelOperations::CONTINUE,
-                        Some(OperationMessage::new(OPERATIONS::CHANGE, changed_files)),
+                        ChannelOperation::CONTINUE(OPERATION::CHANGE),
+                        Some(changed_files),
                     ));
                 }
 
                 if deleted_files.len() > 0 {
                     // trigger event for added files
                     let _ = local_sender.clone().send(ChannelMessage::new(
-                        ChannelOperations::CONTINUE,
-                        Some(OperationMessage::new(
-                            OPERATIONS::DELETE,
-                            deleted_files.clone(),
-                        )),
+                        ChannelOperation::CONTINUE(OPERATION::DELETE),
+                        Some(deleted_files.clone()),
                     ));
 
                     for f in deleted_files.iter() {
@@ -379,7 +366,7 @@ impl FileWatcher {
             .channel_sender
             .as_ref()
             .unwrap()
-            .send(ChannelMessage::new(ChannelOperations::EXIT, None));
+            .send(ChannelMessage::new(ChannelOperation::EXIT, None));
 
         self.events_thread = None;
         self.main_thread = None;
@@ -422,7 +409,7 @@ impl FileWatcher {
         }
 
         let creation_time = notify_filters.contains(NotifyFilters::CreationTime)
-            && old_meta.created().unwrap() != file.created().unwrap();
+            && old_meta.created().unwrap() != file.created();
 
         creation_time
     }
