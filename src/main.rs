@@ -2,12 +2,14 @@ use file_watcher::{FileWatcher, FileWatcherOptions, NotifyFilters};
 use std::io;
 
 mod file_watcher;
+mod search_dir;
 
 fn main() -> std::io::Result<()> {
     let mut op = FileWatcherOptions::new("D:\\Test");
-    op.with_extensions(&["*.txt", "*.pdf", "*.rs", "*.jpg", "*.jpeg", "*.*"])
+    op.with_filter("*.txt;*.pdf;*.sql")
         .with_refresh_rate(250)
         .with_notify_filters(NotifyFilters::CreationTime | NotifyFilters::LastWrite)
+        .with_directory_depth(2)
         .with_on_changes(|ev| {
             let files = ev.files();
             println!("{:?} -> {}", ev.operation(), files.len());
@@ -24,7 +26,7 @@ fn main() -> std::io::Result<()> {
     let _ = match fw.start() {
         Ok(started) => {
             println!("[INFO] Watching folder: {}", fw.watched_dir());
-            println!("[INFO] File extensions watched: {:?}", fw.extensions());
+            println!("[INFO] File extensions watched: {:?}", fw.filter());
             println!("[INFO] Press any key to exit!");
 
             started
