@@ -1,3 +1,5 @@
+#![recursion_limit = "255"]
+
 use regex::Regex;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -18,7 +20,7 @@ const VALID_FILTER_REGEX_PATH: &str =
 #[derive(Debug, Clone)]
 pub(crate) struct SearchDir {
     dir_path: PathBuf,
-    depth: Option<u16>,
+    depth: Option<u8>,
     extensions: Option<Vec<&'static str>>,
     file_names: Option<Vec<&'static str>>,
     include_all_files: bool,
@@ -72,7 +74,7 @@ impl File {
 }
 
 impl SearchDir {
-    pub fn new(dir_path: PathBuf, depth: Option<u16>, filter: Option<&'static str>) -> Self {
+    pub fn new(dir_path: PathBuf, depth: Option<u8>, filter: Option<&'static str>) -> Self {
         let path = Path::new(&dir_path);
         if !path.exists() || !path.is_dir() {
             panic!("Directory '{:?}' does not exist", dir_path.clone());
@@ -125,11 +127,11 @@ impl SearchDir {
         }
     }
 
-    pub fn meta(&self) -> &Metadata {
+    pub fn metadata(&self) -> &Metadata {
         &self.meta
     }
 
-    pub fn update_metadata(&mut self) {
+    pub fn sync_metadata(&mut self) {
         self.meta = fs::metadata(self.dir_path.as_path()).unwrap();
     }
 
@@ -148,9 +150,9 @@ impl SearchDir {
     pub fn get_files(&self) -> HashSet<File> {
         let mut result: HashSet<File> = HashSet::new();
 
-        let rec_limit = match self.depth {
+        let rec_limit: u8 = match self.depth {
             Some(value) => value,
-            _ => 128,
+            _ => u8::MAX,
         };
 
         Self::get_files_internal(
@@ -166,7 +168,7 @@ impl SearchDir {
 
     fn get_files_internal(
         dir: &PathBuf,
-        depth: u16,
+        depth: u8,
         extensions: &Option<Vec<&str>>,
         file_names: &Option<Vec<&str>>,
         result: &mut HashSet<File>,

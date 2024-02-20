@@ -1,16 +1,38 @@
 use file_watcher::{FileWatcher, FileWatcherOptions, NotifyFilters};
 use std::io;
 
+use crate::file_watcher::EventArgs;
+
 mod file_watcher;
 mod search_dir;
 
 fn main() -> std::io::Result<()> {
     let mut op = FileWatcherOptions::new("D:\\Test");
-    op.with_filter("*.txt;*.pdf;*.sql")
+    op.with_filter("*.txt;*.pdf;*.sql;*.jpg")
         .with_refresh_rate(250)
         .with_notify_filters(NotifyFilters::CreationTime | NotifyFilters::LastWrite)
-        .with_directory_depth(3)
-        .with_on_changes(|ev| {
+        .with_directory_depth(4)
+        .with_on_created(|ev| {
+            let files = ev.files();
+            println!("{:?} -> {}", ev.operation(), files.len());
+
+            for f in files {
+                println!("-> {} - {:?}", f.name(), f.last_modified());
+            }
+
+            println!();
+        })
+        .with_on_deleted(|ev| {
+            let files = ev.files();
+            println!("{:?} -> {}", ev.operation(), files.len());
+
+            for f in files {
+                println!("-> {} - {:?}", f.name(), f.last_modified());
+            }
+
+            println!();
+        })
+        .with_on_changed(|ev| {
             let files = ev.files();
             println!("{:?} -> {}", ev.operation(), files.len());
 
