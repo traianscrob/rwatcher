@@ -48,6 +48,7 @@ impl Display for NotifyFilters {
 //event args
 pub trait EventArgs: Sized + Clone + Debug {
     fn operation(&self) -> OPERATION;
+    fn files(&self) -> &HashSet<File>;
 }
 
 #[derive(Debug, Clone)]
@@ -69,47 +70,64 @@ impl EventArgs for OnCreatedEventArgs {
     fn operation(&self) -> OPERATION {
         OPERATION::CREATE
     }
+
+    fn files(&self) -> &HashSet<File> {
+        &self.files
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BaseEventArgs {
+    files: HashSet<File>,
 }
 
 #[derive(Debug, Clone)]
 pub struct OnChangedEventArgs {
-    files: HashSet<File>,
+    args: BaseEventArgs,
 }
 
 impl EventArgs for OnChangedEventArgs {
     fn operation(&self) -> OPERATION {
         OPERATION::CHANGE
     }
+
+    fn files(&self) -> &HashSet<File> {
+        &self.args.files
+    }
 }
 
 impl OnChangedEventArgs {
     fn new(files: HashSet<File>) -> Self {
-        Self { files }
+        Self {
+            args: BaseEventArgs { files },
+        }
     }
 
     pub fn files(&self) -> &HashSet<File> {
-        &self.files
+        &self.args.files
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct OnDeletedEventArgs {
-    files: HashSet<File>,
+    args: BaseEventArgs,
 }
 
 impl EventArgs for OnDeletedEventArgs {
     fn operation(&self) -> OPERATION {
         OPERATION::DELETE
     }
+
+    fn files(&self) -> &HashSet<File> {
+        &self.args.files
+    }
 }
 
 impl OnDeletedEventArgs {
     fn new(files: HashSet<File>) -> Self {
-        Self { files }
-    }
-
-    pub fn files(&self) -> &HashSet<File> {
-        &self.files
+        Self {
+            args: BaseEventArgs { files },
+        }
     }
 }
 
