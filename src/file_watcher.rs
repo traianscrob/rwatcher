@@ -7,26 +7,30 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
+use crate::events::{
+    OnChangedEventArgs, OnCreatedEventArgs, OnDeletedEventArgs, OnRenamedEventArgs,
+    RenamedFileEntry,
+};
 use crate::search_dir::{File, SearchDir};
+
+#[derive(Debug, Clone)]
+pub enum OPERATION {
+    CREATE(HashSet<File>),
+    CHANGE(HashSet<File>),
+    DELETE(HashSet<File>),
+    RENAME(HashSet<RenamedFileEntry>),
+    ERROR(Error),
+}
 
 //enums
 #[derive(Debug, Clone)]
-pub enum OPERATION {
-    CREATE,
-    CHANGE,
-    DELETE,
-    RENAME,
-    ERROR,
-}
-
-#[derive(Debug, Clone)]
 enum ChannelOperation {
-    CONTINUE(OPERATION, HashSet<File>),
+    CONTINUE(OPERATION),
     EXIT,
 }
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy,PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct NotifyFilters : u8 {
         const Attributes = 0;
         const CreationTime = 1;
@@ -45,92 +49,6 @@ impl Display for NotifyFilters {
     }
 }
 
-//event args
-pub trait EventArgs: Sized + Clone + Debug {
-    fn operation(&self) -> OPERATION;
-    fn files(&self) -> &HashSet<File>;
-}
-
-#[derive(Debug, Clone)]
-pub struct OnCreatedEventArgs {
-    files: HashSet<File>,
-}
-
-impl OnCreatedEventArgs {
-    pub fn new(files: HashSet<File>) -> Self {
-        Self { files: files }
-    }
-
-    pub fn files(&self) -> &HashSet<File> {
-        &self.files
-    }
-}
-
-impl EventArgs for OnCreatedEventArgs {
-    fn operation(&self) -> OPERATION {
-        OPERATION::CREATE
-    }
-
-    fn files(&self) -> &HashSet<File> {
-        &self.files
-    }
-}
-
-#[derive(Debug, Clone)]
-struct BaseEventArgs {
-    files: HashSet<File>,
-}
-
-#[derive(Debug, Clone)]
-pub struct OnChangedEventArgs {
-    args: BaseEventArgs,
-}
-
-impl EventArgs for OnChangedEventArgs {
-    fn operation(&self) -> OPERATION {
-        OPERATION::CHANGE
-    }
-
-    fn files(&self) -> &HashSet<File> {
-        &self.args.files
-    }
-}
-
-impl OnChangedEventArgs {
-    fn new(files: HashSet<File>) -> Self {
-        Self {
-            args: BaseEventArgs { files },
-        }
-    }
-
-    pub fn files(&self) -> &HashSet<File> {
-        &self.args.files
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct OnDeletedEventArgs {
-    args: BaseEventArgs,
-}
-
-impl EventArgs for OnDeletedEventArgs {
-    fn operation(&self) -> OPERATION {
-        OPERATION::DELETE
-    }
-
-    fn files(&self) -> &HashSet<File> {
-        &self.args.files
-    }
-}
-
-impl OnDeletedEventArgs {
-    fn new(files: HashSet<File>) -> Self {
-        Self {
-            args: BaseEventArgs { files },
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct FileWatcherOptions {
     dir: &'static str,
@@ -139,6 +57,7 @@ pub struct FileWatcherOptions {
     on_created: Option<fn(OnCreatedEventArgs)>,
     on_deleted: Option<fn(OnDeletedEventArgs)>,
     on_changed: Option<fn(OnChangedEventArgs)>,
+    on_renamed: Option<fn(OnRenamedEventArgs)>,
     notify_filters: NotifyFilters,
     dir_depth: Option<u8>,
 }
@@ -152,8 +71,9 @@ impl FileWatcherOptions {
             on_changed: None,
             on_created: None,
             on_deleted: None,
-            notify_filters: NotifyFilters::LastWrite,
+            on_renamed: None,
             dir_depth: None,
+            notify_filters: NotifyFilters::LastWrite,
         }
     }
 
@@ -187,6 +107,12 @@ impl FileWatcherOptions {
         self
     }
 
+    pub fn with_on_renamed(&mut self, event: fn(OnRenamedEventArgs)) -> &mut Self {
+        self.on_renamed = Some(event);
+
+        self
+    }
+
     pub fn with_notify_filters(&mut self, filters: NotifyFilters) -> &mut Self {
         self.notify_filters = filters;
 
@@ -211,6 +137,7 @@ pub struct FileWatcher {
     on_created: Option<fn(OnCreatedEventArgs)>,
     on_deleted: Option<fn(OnDeletedEventArgs)>,
     on_changed: Option<fn(OnChangedEventArgs)>,
+    on_renamed: Option<fn(OnRenamedEventArgs)>,
     channel_sender: Option<Sender<ChannelOperation>>,
     notify_filters: NotifyFilters,
     dir_depth: Option<u8>,
@@ -250,6 +177,10 @@ impl FileWatcher {
             result.on_changed(on_event);
         }
 
+        if let Some(on_event) = op.on_renamed {
+            result.on_renamed(on_event);
+        }
+
         result
     }
 
@@ -275,6 +206,7 @@ impl FileWatcher {
             on_changed: None,
             on_created: None,
             on_deleted: None,
+            on_renamed: None,
             channel_sender: None,
             notify_filters: NotifyFilters::LastWrite,
             dir_depth,
@@ -312,6 +244,12 @@ impl FileWatcher {
         self
     }
 
+    pub fn on_renamed(&mut self, action: fn(OnRenamedEventArgs)) -> &Self {
+        self.on_renamed = Some(action);
+
+        self
+    }
+
     pub fn start(&mut self) -> Result<bool, std::io::Error> {
         if self.is_started {
             return Ok(false);
@@ -328,35 +266,35 @@ impl FileWatcher {
         let on_created = self.on_created;
         let on_deleted = self.on_deleted;
         let on_changed = self.on_changed;
+        let on_renamed = self.on_renamed;
         let dir_path = self.dir_path.clone();
 
         //child thread for receiving changed files
         let child = thread::spawn(move || loop {
             match receiver_mutex.lock().unwrap().recv() {
                 Ok(value) => match value {
-                    ChannelOperation::CONTINUE(op, data) => match op {
-                        OPERATION::CREATE => {
+                    ChannelOperation::CONTINUE(op) => match op {
+                        OPERATION::CREATE(data) => {
                             if let Some(func) = on_created {
-                                func(OnCreatedEventArgs::new(
-                                    data.into_iter().map(|f| f.clone()).collect(),
-                                ));
+                                func(OnCreatedEventArgs::new(data.into_iter().collect()));
                             }
                         }
-                        OPERATION::CHANGE => {
+                        OPERATION::CHANGE(data) => {
                             if let Some(func) = on_changed {
-                                func(OnChangedEventArgs::new(
-                                    data.into_iter().map(|f| f.clone()).collect(),
-                                ));
+                                func(OnChangedEventArgs::new(data.into_iter().collect()));
                             }
                         }
-                        OPERATION::DELETE => {
+                        OPERATION::DELETE(data) => {
                             if let Some(func) = on_deleted {
-                                func(OnDeletedEventArgs::new(
-                                    data.into_iter().map(|f| f.clone()).collect(),
-                                ));
+                                func(OnDeletedEventArgs::new(data.into_iter().collect()));
                             }
                         }
-                        OPERATION::RENAME | OPERATION::ERROR => todo!(),
+                        OPERATION::RENAME(data) => {
+                            if let Some(func) = on_renamed {
+                                func(OnRenamedEventArgs::new(data.into_iter().collect()));
+                            }
+                        }
+                        OPERATION::ERROR(_) => todo!(),
                     },
                     ChannelOperation::EXIT => {
                         break;
@@ -371,94 +309,114 @@ impl FileWatcher {
         let depth = self.dir_depth.clone();
 
         //main child thread
-        let main = thread::spawn(move || {
-            let mut all_files = HashSet::<File>::new();
+        let main =
+            thread::spawn(move || {
+                let mut all_files = HashSet::<File>::new();
 
-            let filter = filter_mutex.lock().unwrap();
-            let mut search_dir = SearchDir::new(dir_path.clone(), depth, *filter);
+                let filter = filter_mutex.lock().unwrap();
+                let mut search_dir = SearchDir::new(dir_path.clone(), depth, *filter);
 
-            let notify_filters = Arc::clone(&notify_filters_mutex);
+                let notify_filters = Arc::clone(&notify_filters_mutex);
 
-            //load existing files
-            for file in Self::get_files(&search_dir, *notify_filters.lock().unwrap()) {
-                all_files.insert(file);
-            }
-
-            //check for directory changes
-            search_dir.sync_metadata();
-            loop {
-                //if there's no change in the directory do not get files
-                if !search_dir.has_changes() {
-                    thread::sleep(Duration::from_millis(refresh_rate));
-
-                    continue;
+                //load existing files
+                for file in Self::get_files(&search_dir, *notify_filters.lock().unwrap()) {
+                    all_files.insert(file);
                 }
 
-                let latest_files = Self::get_files(&search_dir, *notify_filters.lock().unwrap());
-                let added_files: HashSet<File> = latest_files
-                    .difference(&all_files)
-                    .map(|fe| fe.clone())
-                    .collect();
+                //check for directory changes
+                search_dir.sync_metadata();
+                loop {
+                    //if there's no change in the directory do not get files
+                    if !search_dir.has_changed() {
+                        thread::sleep(Duration::from_millis(refresh_rate));
 
-                let deleted_files: HashSet<File> = all_files
-                    .difference(&latest_files)
-                    .map(|fe| fe.clone())
-                    .collect();
+                        continue;
+                    }
 
-                let mut changed_files: HashSet<File> = HashSet::new();
-                for file in latest_files.iter() {
-                    let old_file = all_files.get(&file);
-                    match old_file {
-                        Some(fe) => {
+                    let latest_files =
+                        Self::get_files(&search_dir, *notify_filters.lock().unwrap());
+
+                    let mut created_files: HashSet<File> = latest_files
+                        .difference(&all_files)
+                        .map(|fe| fe.clone())
+                        .collect();
+
+                    let mut deleted_files: HashSet<File> = all_files
+                        .difference(&latest_files)
+                        .map(|fe| fe.clone())
+                        .collect();
+
+                    let mut changed_files: HashSet<File> = HashSet::new();
+                    for file in latest_files.iter() {
+                        if let Some(fe) = all_files.get(&file) {
                             // file was changed
                             if fe.last_modified().unwrap() != file.last_modified().unwrap() {
                                 changed_files.insert(file.clone());
 
-                                all_files.remove(&file);
+                                all_files.remove(file);
                                 all_files.insert(file.clone());
                             }
                         }
-                        _ => (),
                     }
-                }
 
-                let local_sender = sender_mutex.lock().unwrap();
-                if added_files.len() > 0 {
-                    all_files = all_files.union(&added_files).map(|f| f.clone()).collect();
+                    let mut renamed_files: Vec<RenamedFileEntry> = Vec::new();
+                    for created in created_files.clone().iter() {
+                        for deleted in deleted_files.clone().iter() {
+                            if deleted.last_modified() == created.last_modified() {
+                                renamed_files
+                                    .push(RenamedFileEntry::new(created.name(), deleted.name()));
 
-                    // trigger event for added files
-                    if let Err(error) = local_sender
-                        .clone()
-                        .send(ChannelOperation::CONTINUE(OPERATION::CREATE, added_files))
-                    {
-                        panic!("Error while sending{}", error);
+                                all_files.remove(deleted);
+                                all_files.insert(created.clone());
+                                break;
+                            }
+                        }
+                    }
+
+                    created_files.retain(|f| !renamed_files.iter().any(|v| v.name().eq(f.name())));
+                    deleted_files
+                        .retain(|f| !renamed_files.iter().any(|v| v.old_name().eq(f.name())));
+
+                    let local_sender = sender_mutex.lock().unwrap();
+                    if created_files.len() > 0 {
+                        all_files = all_files.union(&created_files).map(|f| f.clone()).collect();
+
+                        // trigger event for added files
+                        let _ = local_sender
+                            .clone()
+                            .send(ChannelOperation::CONTINUE(OPERATION::CREATE(created_files)));
+                    }
+
+                    // trigger event for changed files
+                    if changed_files.len() > 0 {
+                        let _ = local_sender
+                            .clone()
+                            .send(ChannelOperation::CONTINUE(OPERATION::CHANGE(changed_files)));
+                    }
+
+                    if deleted_files.len() > 0 {
+                        for file in deleted_files.iter() {
+                            all_files.remove(&file);
+                        }
+
+                        // trigger event for added files
+                        let _ = local_sender.clone().send(ChannelOperation::CONTINUE(
+                            OPERATION::DELETE(deleted_files.clone()),
+                        ));
                     };
+
+                    if renamed_files.len() > 0 {
+                        // trigger event for added files
+                        let _ = local_sender.clone().send(ChannelOperation::CONTINUE(
+                            OPERATION::RENAME(renamed_files.into_iter().collect()),
+                        ));
+                    };
+
+                    drop(local_sender);
+
+                    thread::sleep(Duration::from_millis(refresh_rate));
                 }
-
-                // trigger event for changed files
-                if changed_files.len() > 0 {
-                    let _ = local_sender
-                        .clone()
-                        .send(ChannelOperation::CONTINUE(OPERATION::CHANGE, changed_files));
-                }
-
-                if deleted_files.len() > 0 {
-                    for file in deleted_files.iter() {
-                        all_files.remove(&file);
-                    }
-
-                    // trigger event for added files
-                    let _ = local_sender.clone().send(ChannelOperation::CONTINUE(
-                        OPERATION::DELETE,
-                        deleted_files.clone(),
-                    ));
-                };
-
-                drop(local_sender);
-
-                thread::sleep(Duration::from_millis(refresh_rate));
-            }
-        });
+            });
 
         self.main_thread = Some(main);
         self.events_thread = Some(child);

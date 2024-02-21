@@ -24,6 +24,7 @@ pub(crate) struct SearchDir {
     extensions: Option<Vec<&'static str>>,
     file_names: Option<Vec<&'static str>>,
     include_all_files: bool,
+    last_synced: Option<SystemTime>,
     meta: Metadata,
 }
 
@@ -124,6 +125,7 @@ impl SearchDir {
             extensions,
             file_names,
             include_all_files,
+            last_synced: None,
         }
     }
 
@@ -139,7 +141,7 @@ impl SearchDir {
         self.meta.modified()
     }
 
-    pub fn has_changes(&self) -> bool {
+    pub fn has_changed(&self) -> bool {
         self.last_modified().unwrap()
             != fs::metadata(self.dir_path.as_path())
                 .unwrap()

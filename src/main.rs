@@ -1,8 +1,10 @@
+use events::OnCreatedEventArgs;
 use file_watcher::{FileWatcher, FileWatcherOptions, NotifyFilters};
 use std::io;
 
-use crate::file_watcher::EventArgs;
+use crate::events::EventArgs;
 
+mod events;
 mod file_watcher;
 mod search_dir;
 
@@ -12,32 +14,42 @@ fn main() -> std::io::Result<()> {
         .with_refresh_rate(250)
         .with_notify_filters(NotifyFilters::CreationTime | NotifyFilters::LastWrite)
         .with_directory_depth(4)
-        .with_on_created(|ev| {
+        .with_on_created(|ev: OnCreatedEventArgs| {
             let files = ev.files();
-            println!("{:?} -> {}", ev.operation(), files.len());
+            println!("{} -> {}", "CREATED", files.len());
 
-            for f in files {
-                println!("-> {} - {:?}", f.name(), f.last_modified());
+            for f in ev.files() {
+                println!("-> {}", f.name());
             }
 
             println!();
         })
         .with_on_deleted(|ev| {
             let files = ev.files();
-            println!("{:?} -> {}", ev.operation(), files.len());
+            println!("{:?} -> {}", "DELETED", files.len());
 
-            for f in files {
-                println!("-> {} - {:?}", f.name(), f.last_modified());
+            for f in ev.files() {
+                println!("-> {}", f.name());
             }
 
             println!();
         })
         .with_on_changed(|ev| {
             let files = ev.files();
-            println!("{:?} -> {}", ev.operation(), files.len());
+            println!("{} -> {}", "CHANGED", files.len());
+
+            for f in ev.files() {
+                println!("-> {}", f.name());
+            }
+
+            println!();
+        })
+        .with_on_renamed(|ev| {
+            let files = ev.files();
+            println!("{} -> {}", "RENAMED", files.len());
 
             for f in files {
-                println!("-> {} - {:?}", f.name(), f.last_modified());
+                println!("-> {} -> {}", f.old_name(), f.name());
             }
 
             println!();
