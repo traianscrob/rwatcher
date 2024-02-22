@@ -1,11 +1,7 @@
-use events::OnCreatedEventArgs;
-use file_watcher::{FileWatcher, FileWatcherOptions, NotifyFilters};
+use rwatcher::{FileWatcher, FileWatcherOptions, NotifyFilters};
 use std::io;
 
-use crate::events::EventArgs;
-
 mod events;
-mod file_watcher;
 mod search_dir;
 
 fn main() -> std::io::Result<()> {
@@ -14,11 +10,11 @@ fn main() -> std::io::Result<()> {
         .with_refresh_rate(250)
         .with_notify_filters(NotifyFilters::CreationTime | NotifyFilters::LastWrite)
         .with_directory_depth(4)
-        .with_on_created(|ev: OnCreatedEventArgs| {
+        .with_on_created(|ev| {
             let files = ev.files();
             println!("{} -> {}", "CREATED", files.len());
 
-            for f in ev.files() {
+            for f in files {
                 println!("-> {}", f.name());
             }
 
@@ -28,7 +24,7 @@ fn main() -> std::io::Result<()> {
             let files = ev.files();
             println!("{:?} -> {}", "DELETED", files.len());
 
-            for f in ev.files() {
+            for f in files {
                 println!("-> {}", f.name());
             }
 
@@ -38,7 +34,7 @@ fn main() -> std::io::Result<()> {
             let files = ev.files();
             println!("{} -> {}", "CHANGED", files.len());
 
-            for f in ev.files() {
+            for f in files {
                 println!("-> {}", f.name());
             }
 

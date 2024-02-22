@@ -74,6 +74,22 @@ impl File {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RenamedFileEntry(String, String);
+impl RenamedFileEntry {
+    pub fn new(name: &str, old_name: &str) -> Self {
+        Self(name.to_string(), old_name.to_string())
+    }
+
+    pub fn name(&self) -> &str {
+        &self.0
+    }
+
+    pub fn old_name(&self) -> &str {
+        &self.1
+    }
+}
+
 impl SearchDir {
     pub fn new(dir_path: PathBuf, depth: Option<u8>, filter: Option<&'static str>) -> Self {
         let path = Path::new(&dir_path);
