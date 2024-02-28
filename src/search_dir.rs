@@ -1,5 +1,6 @@
 #![recursion_limit = "255"]
 
+use core::panic;
 use regex::Regex;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -18,11 +19,11 @@ const VALID_FILTER_REGEX_PATH: &str =
     r"^\*\.\*$|^\*\.([a-zA-Z0-9])+$|^([a-zA-Z0-9])+\.([a-zA-Z0-9])+$";
 
 #[derive(Debug, Clone)]
-pub(crate) struct SearchDir {
+pub struct SearchDir {
     dir_path: PathBuf,
     depth: Option<u8>,
-    extensions: Option<Vec<&'static str>>,
-    file_names: Option<Vec<&'static str>>,
+    extensions: Option<Vec<String>>,
+    file_names: Option<Vec<String>>,
     include_all_files: bool,
     last_synced: Option<SystemTime>,
     meta: Metadata,
@@ -91,19 +92,22 @@ impl RenamedFileEntry {
 }
 
 impl SearchDir {
-    pub fn new(dir_path: PathBuf, depth: Option<u8>, filter: Option<&'static str>) -> Self {
+    pub fn new(dir_path: PathBuf, depth: Option<u8>, filter: Option<String>) -> Self {
         let path = Path::new(&dir_path);
         if !path.exists() || !path.is_dir() {
             panic!("Directory '{:?}' does not exist", dir_path.clone());
         }
 
-        let mut file_names: Option<Vec<&str>> = None;
-        let mut extensions: Option<Vec<&str>> = None;
+        let mut file_names: Option<Vec<String>> = None;
+        let mut extensions: Option<Vec<String>> = None;
         let mut include_all_files = false;
 
-        if let Some(f) = filter {
-            if !f.is_empty() {
-                let split_extensions: Vec<&'static str> = f.split(FILTER_SEPARATORS).collect();
+        if let Some(file) = filter {
+            if !file.is_empty() {
+                let split_extensions: Vec<String> = file
+                    .split(FILTER_SEPARATORS)
+                    .map(|f| f.to_string())
+                    .collect();
                 include_all_files = split_extensions
                     .clone()
                     .into_iter()
@@ -111,20 +115,20 @@ impl SearchDir {
 
                 if !include_all_files {
                     let filter_regex = Regex::new(VALID_FILTER_REGEX_PATH).unwrap();
-                    let mut exs: Vec<&'static str> = vec![];
-                    let mut files: Vec<&'static str> = vec![];
+                    let mut exs: Vec<String> = vec![];
+                    let mut files: Vec<String> = vec![];
 
-                    for elem in split_extensions.iter() {
-                        if !filter_regex.is_match(elem) {
+                    for elem in split_extensions {
+                        if !filter_regex.is_match(elem.as_str()) {
                             panic!("The filter should contain valid file extensions separated by {:?}! i.e: *.*, *.ext, file_name.ext", FILTER_SEPARATORS);
                         }
 
                         //if we have entry like *.ext
                         if elem.starts_with("*") {
-                            let splits: Vec<&'static str> = elem.split(POINT_CHAR).collect();
-                            exs.push(splits[1]);
+                            let splits: Vec<&str> = elem.split(POINT_CHAR).collect();
+                            exs.push(splits[1].to_string());
                         } else {
-                            files.push(&elem);
+                            files.push(elem.to_string());
                         }
                     }
 
@@ -170,7 +174,7 @@ impl SearchDir {
 
         let rec_limit: u8 = match self.depth {
             Some(value) => value,
-            _ => u8::MAX,
+            _ => u8::MAX - 1,
         };
 
         Self::get_files_internal(
@@ -184,11 +188,35 @@ impl SearchDir {
         result
     }
 
+    pub fn get_all_files(dir_path: &str) -> HashSet<File> {
+        let path = Self::validate_dir_path(dir_path);
+
+        let mut result: HashSet<File> = HashSet::new();
+        let rec_limit: u8 = u8::MAX - 1;
+
+        Self::get_files_internal(&path, rec_limit + 1, &None, &None, &mut result);
+
+        result
+    }
+
+    fn validate_dir_path(dir_path: &str) -> PathBuf {
+        if dir_path.is_empty() {
+            panic!("The directory path cannot be empty!")
+        }
+
+        let path = Path::new(dir_path);
+        if !path.exists() || !path.is_dir() {
+            panic!("Directory '{:?}' does not exist", dir_path);
+        }
+
+        path.to_path_buf()
+    }
+
     fn get_files_internal(
         dir: &PathBuf,
         depth: u8,
-        extensions: &Option<Vec<&str>>,
-        file_names: &Option<Vec<&str>>,
+        extensions: &Option<Vec<String>>,
+        file_names: &Option<Vec<String>>,
         result: &mut HashSet<File>,
     ) {
         if depth == 0 {
@@ -213,8 +241,8 @@ impl SearchDir {
                 }
 
                 if let Some(names) = file_names {
-                    let file_name = path_buf.file_name().unwrap().to_str().unwrap();
-                    return names.as_slice().contains(&file_name);
+                    let file_name = path_buf.file_name().unwrap().to_str().unwrap().to_string();
+                    return names.contains(&file_name);
                 }
 
                 true

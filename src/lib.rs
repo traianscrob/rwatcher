@@ -1,5 +1,5 @@
 mod events;
-mod search_dir;
+pub mod search_dir;
 
 use std::collections::HashSet;
 use std::fmt::{Debug, Display, Error};
@@ -55,8 +55,8 @@ impl Display for NotifyFilters {
 
 #[derive(Debug, Clone)]
 pub struct FileWatcherOptions {
-    dir: &'static str,
-    filter: Option<&'static str>,
+    dir: String,
+    filter: Option<String>,
     refresh_rate_mils: u64,
     on_created: Option<fn(OnCreatedEventArgs)>,
     on_deleted: Option<fn(OnDeletedEventArgs)>,
@@ -67,9 +67,9 @@ pub struct FileWatcherOptions {
 }
 
 impl FileWatcherOptions {
-    pub fn new(directory: &'static str) -> Self {
+    pub fn new(directory: &str) -> Self {
         Self {
-            dir: directory,
+            dir: directory.to_string(),
             filter: None,
             refresh_rate_mils: 250,
             on_changed: None,
@@ -81,8 +81,8 @@ impl FileWatcherOptions {
         }
     }
 
-    pub fn with_filter(&mut self, filter: &'static str) -> &mut Self {
-        self.filter = Some(filter);
+    pub fn with_filter(&mut self, filter: &str) -> &mut Self {
+        self.filter = Some(filter.to_string());
 
         self
     }
@@ -132,8 +132,7 @@ impl FileWatcherOptions {
 #[derive(Debug)]
 pub struct FileWatcher {
     dir_path: PathBuf,
-    filter: Option<&'static str>,
-    is_started: bool,
+    filter: Option<String>,
     last_sync: Option<SystemTime>,
     refresh_rate_in_milliseconds: u64,
     main_thread: Option<JoinHandle<()>>,
@@ -145,26 +144,40 @@ pub struct FileWatcher {
     channel_sender: Option<Sender<ChannelOperation>>,
     notify_filters: NotifyFilters,
     dir_depth: Option<u8>,
+    is_started: Arc<Mutex<bool>>,
 }
 
 impl Drop for FileWatcher {
     fn drop(&mut self) {
+        if *self.is_started.lock().unwrap() {
+            let _ = self.stop();
+        }
+
         self.dir_path.clear();
 
         self.filter = None;
-        self.main_thread = None;
-        self.events_thread = None;
         self.last_sync = None;
         self.on_changed = None;
         self.channel_sender = None;
         self.refresh_rate_in_milliseconds = 0;
-        self.is_started = false;
+        self.main_thread = None;
+        self.events_thread = None;
+        self.on_created = None;
+        self.on_deleted = None;
+        self.on_renamed = None;
+
+        drop(self.is_started.lock());
     }
 }
 
 impl FileWatcher {
     pub fn new_with_options(op: &FileWatcherOptions) -> Self {
-        let mut result = Self::new(op.dir, op.filter, op.refresh_rate_mils, op.dir_depth);
+        let mut result = Self::new(
+            op.dir.as_str(),
+            op.filter.clone(),
+            op.refresh_rate_mils,
+            op.dir_depth,
+        );
 
         result.notify_filters = op.notify_filters;
         result.dir_depth = op.dir_depth;
@@ -190,7 +203,7 @@ impl FileWatcher {
 
     pub fn new(
         dir: &str,
-        filter: Option<&'static str>,
+        filter: Option<String>,
         refresh_rate_in_milliseconds: u64,
         dir_depth: Option<u8>,
     ) -> Self {
@@ -202,7 +215,6 @@ impl FileWatcher {
         let result = Self {
             dir_path,
             filter,
-            is_started: false,
             last_sync: None,
             refresh_rate_in_milliseconds,
             main_thread: None,
@@ -213,7 +225,8 @@ impl FileWatcher {
             on_renamed: None,
             channel_sender: None,
             notify_filters: NotifyFilters::LastWrite,
-            dir_depth,
+            dir_depth: dir_depth,
+            is_started: Arc::new(Mutex::new(false)),
         };
 
         result
@@ -255,7 +268,7 @@ impl FileWatcher {
     }
 
     pub fn start(&mut self) -> Result<bool, std::io::Error> {
-        if self.is_started {
+        if *self.is_started.lock().unwrap() {
             return Ok(false);
         }
 
@@ -305,20 +318,25 @@ impl FileWatcher {
                     }
                 },
                 Err(error) => {
-                    panic!("{}", error)
+                    println!("{}", error);
+                    break;
                 }
             }
         });
 
         let depth = self.dir_depth.clone();
 
-        //main child thread
+        *self.is_started.lock().unwrap() = true;
+        let is_started = self.is_started.clone();
+
+        //main thread for checking for changes in the directory
         let main =
             thread::spawn(move || {
                 let mut all_files = HashSet::<File>::new();
 
-                let filter = filter_mutex.lock().unwrap();
-                let mut search_dir = SearchDir::new(dir_path.clone(), depth, *filter);
+                let filter_mutex = filter_mutex.lock().unwrap();
+                let mut search_dir =
+                    SearchDir::new(dir_path.clone(), depth, (*filter_mutex).clone());
 
                 let notify_filters = Arc::clone(&notify_filters_mutex);
 
@@ -330,6 +348,13 @@ impl FileWatcher {
                 //check for directory changes
                 search_dir.sync_metadata();
                 loop {
+                    //check if the main thread should stop
+                    if !*is_started.lock().unwrap() {
+                        //send an exit message for the child thread handling events
+                        let _ = sender_mutex.lock().unwrap().send(ChannelOperation::EXIT);
+                        break;
+                    }
+
                     //if there's no change in the directory do not get files
                     if !search_dir.has_changed() {
                         thread::sleep(Duration::from_millis(refresh_rate));
@@ -426,27 +451,20 @@ impl FileWatcher {
         self.events_thread = Some(child);
         self.channel_sender = Some(sender.clone());
 
-        self.is_started = !self.is_started;
-
         Ok(true)
     }
 
     pub fn stop(&mut self) -> Result<bool, Error> {
-        if !self.is_started {
+        if !*self.is_started.lock().unwrap() {
             return Ok(false);
         }
 
-        //send an exit message for the child thread handling events
-        let _ = self
-            .channel_sender
-            .as_ref()
-            .unwrap()
-            .send(ChannelOperation::EXIT);
+        //set the flag to false to be picked up by the main thread
+        *self.is_started.lock().unwrap() = false;
 
         self.events_thread = None;
         self.main_thread = None;
         self.events_thread = None;
-        self.is_started = false;
 
         Ok(true)
     }
@@ -501,7 +519,7 @@ mod tests {
     fn it_works() {
         let folder = "D:\\Test";
 
-        let mut fw = FileWatcher::new(folder, Some("*.txt"), 250, None);
+        let mut fw = FileWatcher::new(folder, Some(String::from("*.txt")), 250, None);
         fw.on_changed(|ev: OnChangedEventArgs| {
             println!("{:?}", ev.files());
         });

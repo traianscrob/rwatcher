@@ -126,4 +126,9 @@ dependencies = [
  "async-channel",
  "bitflags",
  "regex",
+ "thread_pool",
 ]
+
+[[package]]
+name = "thread_pool"
+version = "0.1.0"

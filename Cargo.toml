@@ -9,3 +9,6 @@ edition = "2021"
 async-channel = "2.2.0"
 bitflags = "2.4.2"
 regex = "1.10.3"
+
+[dependencies.thread_pool]
+path = "../thread_pool"
